@@ -1,6 +1,5 @@
 use crate::data::{Candles, Position, PositionSide, Signal};
-use anyhow::Context;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -9,6 +8,7 @@ pub struct Database {
     pub pool: PgPool,
 }
 
+#[allow(dead_code)]
 impl Database {
     pub async fn new(database_url: &str) -> Result<Self> {
         let pool = sqlx::postgres::PgPoolOptions::new()
@@ -24,7 +24,10 @@ impl Database {
 
     pub async fn save_order(&self, position: &Position, manual: bool) -> Result<()> {
         let opened = position.opened_at;
-        let opened_at = Utc.timestamp_opt(opened, 0).single().unwrap();
+        let opened_at = Utc
+            .timestamp_opt(opened, 0)
+            .single()
+            .context("Invalid timestamp")?;
 
         sqlx::query!(
             r#"
@@ -73,9 +76,12 @@ impl Database {
         Ok(())
     }
 
-    pub async fn save_signal(&self, signal: Signal) -> Result<()> {
+    pub async fn save_signal(&self, signal: &Signal) -> Result<()> {
         let ts = signal.timestamp;
-        let timestamp: DateTime<Utc> = Utc.timestamp_opt(ts, 0).single().unwrap();
+        let timestamp: DateTime<Utc> = Utc
+            .timestamp_opt(ts, 0)
+            .single()
+            .context("Invalid timestamp")?;
 
         sqlx::query!(
             r#"
@@ -96,8 +102,35 @@ impl Database {
         Ok(())
     }
 
+    pub async fn save_candle(&self, candle: &Candles, symbol: &str) -> Result<()> {
+        // Use runtime query to avoid need for sqlx prepare
+        sqlx::query(
+            r#"
+            INSERT INTO candles (symbol, timestamp, open, high, low, close, volume)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (symbol, timestamp) DO UPDATE SET
+                open = EXCLUDED.open,
+                high = EXCLUDED.high,
+                low = EXCLUDED.low,
+                close = EXCLUDED.close,
+                volume = EXCLUDED.volume
+            "#,
+        )
+        .bind(symbol)
+        .bind(candle.timestamp)
+        .bind(candle.open)
+        .bind(candle.high)
+        .bind(candle.low)
+        .bind(candle.close)
+        .bind(candle.volume)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn get_open_orders(&self) -> Result<Vec<Position>> {
-        let query = sqlx::query_as::<
+        let rows = sqlx::query_as::<
             _,
             (
                 String,
@@ -118,10 +151,9 @@ impl Database {
             "#,
         )
         .fetch_all(&self.pool)
-        .await
-        .unwrap();
+        .await?;
 
-        let position = query
+        let positions = rows
             .into_iter()
             .map(|row| Position {
                 id: row.0,
@@ -139,20 +171,53 @@ impl Database {
             })
             .collect();
 
-        Ok(position)
+        Ok(positions)
     }
 
-    pub async fn load_from_db(&self) -> Result<Vec<Candles>> {
-        let query = sqlx::query_as::<_, (i64, Decimal, Decimal, Decimal, Decimal, Decimal)>(
+    pub async fn load_candles(&self, symbol: &str, limit: i64) -> Result<Vec<Candles>> {
+        let rows = sqlx::query_as::<_, (i64, Decimal, Decimal, Decimal, Decimal, Decimal)>(
             r#"
             SELECT timestamp, open, high, low, close, volume
             FROM candles
+            WHERE symbol = $1
+            ORDER BY timestamp DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(symbol)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let candles = rows
+            .into_iter()
+            .rev() // Reverse to get oldest first
+            .map(|row| Candles {
+                timestamp: row.0,
+                open: row.1,
+                high: row.2,
+                low: row.3,
+                close: row.4,
+                volume: row.5,
+            })
+            .collect();
+
+        Ok(candles)
+    }
+
+    /// Load all candles from the database (for backtesting)
+    pub async fn load_from_db(&self) -> Result<Vec<Candles>> {
+        let rows = sqlx::query_as::<_, (i64, Decimal, Decimal, Decimal, Decimal, Decimal)>(
+            r#"
+            SELECT timestamp, open, high, low, close, volume
+            FROM candles
+            ORDER BY timestamp ASC
             "#,
         )
         .fetch_all(&self.pool)
         .await?;
 
-        let candle = query
+        let candles = rows
             .into_iter()
             .map(|row| Candles {
                 timestamp: row.0,
@@ -164,6 +229,24 @@ impl Database {
             })
             .collect();
 
-        Ok(candle)
+        Ok(candles)
+    }
+
+    pub async fn get_trade_stats(&self, symbol: &str) -> Result<(i64, i64, Decimal)> {
+        let result = sqlx::query_as::<_, (i64, i64, Option<Decimal>)>(
+            r#"
+            SELECT 
+                COUNT(*) FILTER (WHERE pnl > 0) as wins,
+                COUNT(*) FILTER (WHERE pnl <= 0) as losses,
+                SUM(pnl) as total_pnl
+            FROM trades
+            WHERE symbol = $1 AND status = 'closed'
+            "#,
+        )
+        .bind(symbol)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok((result.0, result.1, result.2.unwrap_or(Decimal::ZERO)))
     }
 }

@@ -6,5 +6,7 @@
   "max_positions": 3,
   "min_confidence": 0.7,
   "stop_loss_percent": 2.0,
-  "take_profit_percent": 4.0
+  "take_profit_percent": 4.0,
+  "testnet": true,
+  "notifications_enabled": true
 }
