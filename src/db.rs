@@ -26,23 +26,23 @@ impl Database {
         let opened = position.opened_at;
         let opened_at = Utc.timestamp_opt(opened, 0).single().unwrap();
 
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO trades (trade_id, symbol, side, entry_price, quantity,
             stop_loss, take_profit, opened_at, status, manual)
             VAlUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)               
-            "#,
-            position.id,
-            position.symbol,
-            format!("{:?}", position.position_side),
-            position.entry_price,
-            position.size,
-            position.stop_loss,
-            position.take_profit,
-            opened_at,
-            "open",
-            manual
+            "# 
         )
+        .bind(&position.id)
+        .bind(&position.symbol)
+        .bind(format!("{:?}", position.position_side))
+        .bind(position.entry_price)
+        .bind(position.size)
+        .bind(position.stop_loss)
+        .bind(position.take_profit)
+        .bind(opened_at)
+        .bind("open")
+        .bind(manual)
         .execute(&self.pool)
         .await?;
 
@@ -56,17 +56,17 @@ impl Database {
         pnl: Decimal,
     ) -> Result<()> {
         let now = Utc::now();
-        sqlx::query!(
+        sqlx::query(
             r#"
             UPDATE trades
             SET closed_at = $1, exit_price = $2, pnl = $3, status = 'closed'
             WHERE trade_id = $4
-            "#,
-            now,
-            exit_price,
-            pnl,
-            trade_id
+            "# 
         )
+        .bind(now)
+        .bind(exit_price)
+        .bind(pnl)
+        .bind(trade_id)
         .execute(&self.pool)
         .await?;
 
@@ -77,19 +77,19 @@ impl Database {
         let ts = signal.timestamp;
         let timestamp: DateTime<Utc> = Utc.timestamp_opt(ts, 0).single().unwrap();
 
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO signals (id, timestamp, symbol, action, price, confidence, trend)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            "#,
-            signal.id,
-            timestamp,
-            signal.symbol,
-            format!("{:?}", signal.action),
-            signal.price,
-            signal.confidence,
-            format!("{:?}", signal.trend)
+            "# 
         )
+        .bind(&signal.id)
+        .bind(timestamp)
+        .bind(&signal.symbol)
+        .bind(format!("{:?}", signal.action))
+        .bind(signal.price)
+        .bind(signal.confidence)
+        .bind(format!("{:?}", signal.trend))
         .execute(&self.pool)
         .await?;
 

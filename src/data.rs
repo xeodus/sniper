@@ -1,5 +1,7 @@
 use crate::{
-    db::Database, position_manager::PositionManager, rest_client::BinanceClient,
+    db::Database,
+    exchange::Exchange,
+    position_manager::PositionManager,
     signal::MarketSignal,
 };
 use rust_decimal::Decimal;
@@ -10,27 +12,27 @@ use tokio::sync::{mpsc, RwLock};
 #[derive(Debug, Clone, Copy)]
 pub enum PositionSide {
     Long,
-    Short,
+    Short
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Side {
     Buy,
     Sell,
-    Hold,
+    Hold
 }
 
 #[derive(Debug, Clone)]
 pub enum OrderType {
     Market,
-    Limit,
+    Limit
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Trend {
     Up,
     Down,
-    Sideways,
+    Sideways
 }
 
 #[allow(dead_code)]
@@ -43,9 +45,10 @@ pub struct Position {
     pub size: Decimal,
     pub stop_loss: Decimal,
     pub take_profit: Decimal,
-    pub opened_at: i64,
+    pub opened_at: i64
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct Candles {
     pub open: Decimal,
@@ -53,7 +56,7 @@ pub struct Candles {
     pub low: Decimal,
     pub close: Decimal,
     pub volume: Decimal,
-    pub timestamp: i64,
+    pub timestamp: i64
 }
 
 #[allow(dead_code)]
@@ -67,7 +70,7 @@ pub struct OrderReq {
     pub size: Decimal,
     pub sl: Option<Decimal>,
     pub tp: Option<Decimal>,
-    pub manual: bool,
+    pub manual: bool
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -78,18 +81,18 @@ pub struct Signal {
     pub action: Side,
     pub price: Decimal,
     pub trend: Trend,
-    pub confidence: Decimal,
+    pub confidence: Decimal
 }
 
 #[allow(dead_code)]
 pub struct TradingBot {
     pub analyzer: Arc<RwLock<MarketSignal>>,
     pub position_manager: Arc<PositionManager>,
-    pub binance_client: Arc<BinanceClient>,
+    pub exchange: Arc<dyn Exchange>,
     pub signal_tx: mpsc::Sender<Signal>,
     pub order_tx: mpsc::Sender<OrderReq>,
     pub account_balance: Arc<RwLock<Decimal>>,
-    pub db: Arc<Database>,
+    pub db: Arc<Database>
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -105,7 +108,7 @@ pub struct BinanceKline {
     #[serde(rename = "c")]
     pub close: String,
     #[serde(rename = "v")]
-    pub volume: String,
+    pub volume: String
 }
 
 #[allow(dead_code)]
@@ -118,5 +121,5 @@ pub struct BinanceKlineEvent {
     #[serde(rename = "s")]
     pub symbol: String,
     #[serde(rename = "k")]
-    pub kline: BinanceKline,
+    pub kline: BinanceKline
 }

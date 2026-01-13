@@ -1,10 +1,28 @@
 {
   "symbol": "ETH/USDT",
-  "timeframe": "1m",
-  "size": 1,
+  "timeframe": "1s",
   "risk_per_trade": 2.0,
   "max_positions": 3,
   "min_confidence": 0.7,
   "stop_loss_percent": 2.0,
-  "take_profit_percent": 4.0
+  "take_profit_percent": 4.0,
+  "grid": {
+    "enabled": true,
+    "upper_bound_percent": 5.0,
+    "lower_bound_percent": 5.0,
+    "grid_count": 20,
+    "spacing_type": "percentage",
+    "spacing_value": 1.0,
+    "order_size": 100.0,
+    "dynamic_adjustment": true
+  },
+  "volatility": {
+    "window_size": 100,
+    "high_vol_threshold": 0.03,
+    "low_vol_threshold": 0.01,
+    "percentile_threshold": 50.0,
+    "use_atr_for_stops": true,
+    "atr_period": 14,
+    "atr_multiplier": 2.0
+  }
 }
