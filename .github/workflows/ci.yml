@@ -12,22 +12,22 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16-alpine
         env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: ricky
+          POSTGRES_PASSWORD: password
           POSTGRES_DB: sniper
         ports:
           - 5432:5432
         options: >-
-          --health-cmd="pg_isready -U postgres"
+          --health-cmd="pg_isready -U ricky -d sniper"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
 
     env:
       CARGO_TERM_COLOR: always
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/sniper
+      DATABASE_URL: postgresql://ricky:password@localhost:5432/sniper
 
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +36,15 @@ jobs:
         with:
           toolchain: stable
           components: clippy, rustfmt
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres,rustls
+
+      - name: Run database migrations
+        run: cargo sqlx migrate run
+
+      - name: Check sqlx query metadata
+        run: cargo sqlx prepare --check
 
       - name: fmt check
         run: cargo fmt -- --check
@@ -47,4 +56,4 @@ jobs:
         run: cargo build --verbose
 
       - name: Tests
-        run: cargo test --rebase
+        run: cargo test --verbose
