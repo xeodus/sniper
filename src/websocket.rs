@@ -1,70 +1,80 @@
-use anyhow::{Result,Context};
+use crate::data::{BinanceKlineEvent, Candles};
+use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use rust_decimal::Decimal;
-use tracing::{info, warn};
-use crate::data::{BinanceKline, Candles};
+use std::str::FromStr;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tracing::{info, warn};
 
 pub struct WebSocketClient {
-    pub url: String
+    pub url: String,
 }
 
 impl WebSocketClient {
     pub fn new(symbol: &str, interval: &str) -> Self {
         let symbol_lower = symbol.to_lowercase().replace("/", "");
-        let url = format!("wss://stream.binance.com:9443/ws/{}@kline_{}", symbol_lower, interval);
+        let url = format!(
+            "wss://stream.binance.com:9443/ws/{}@kline_{}",
+            symbol_lower,
+            interval.to_lowercase()
+        );
+
+        info!("ws url: {}", url);
 
         Self { url }
     }
 
     pub async fn connect(&self) -> Result<impl StreamExt<Item = Result<Candles, anyhow::Error>>> {
-        let (ws_srteam, _) = connect_async(&self.url).await
-            .context("Failed to connect to Binance WebSocket..")?;
+        let (ws_srteam, response) = connect_async(&self.url)
+            .await
+            .context("WebSocket connection failed")?;
 
-        info!("Connected to Binance WebSocket!");
+        info!(
+            "Connected to Binance WebSocket. HTTP status: {}",
+            response.status()
+        );
 
         let (_, read) = ws_srteam.split();
         let stream = read.filter_map(|msg| async move {
             match msg {
                 Ok(Message::Text(text)) => {
-                    match serde_json::from_str::<BinanceKline>(&text) {
-                        Ok(kline) => {
-                            match (
-                                kline.open.parse::<f64>(),
-                                kline.high.parse::<f64>(),
-                                kline.low.parse::<f64>(),
-                                kline.close.parse::<f64>(),
-                                kline.volume.parse::<f64>()
-                            )
-                            {
-                                (Ok(o), Ok(h), Ok(l), Ok(c), Ok(v)) => {
-                                    Some(Ok(Candles {
-                                        timestamp: kline.open_time / 1000,
-                                        open: Decimal::from_f64_retain(o).unwrap(),
-                                        high: Decimal::from_f64_retain(h).unwrap(),
-                                        low: Decimal::from_f64_retain(l).unwrap(),
-                                        close: Decimal::from_f64_retain(c).unwrap(),
-                                        volume: Decimal::from_f64_retain(v).unwrap()
-                                    }))
-                                },
-                                _ => {
-                                    warn!("Failed to parse kline data from the WebSocket stream..");
-                                    None
-                                }
-                            }
-                        },
+                    let evt: BinanceKlineEvent = match serde_json::from_str(&text) {
+                        Ok(v) => v,
                         Err(e) => {
-                            warn!("Failed to get kline from the WebSocket: {}", e);
-                            None
+                            warn!("Failed to parse raw json from WebSocket stream: {}", e);
+                            return None;
                         }
+                    };
+
+                    let k = evt.kline;
+
+                    if let (Ok(open), Ok(high), Ok(low), Ok(close), Ok(volume)) = (
+                        Decimal::from_str(&k.open),
+                        Decimal::from_str(&k.high),
+                        Decimal::from_str(&k.low),
+                        Decimal::from_str(&k.close),
+                        Decimal::from_str(&k.volume),
+                    ) {
+                        Some(Ok(Candles {
+                            timestamp: k.open_time / 1000,
+                            open,
+                            high,
+                            low,
+                            close,
+                            volume,
+                        }))
+                    } else {
+                        warn!("Failed to parse OHLCV decimals from kline: {:?}", k);
+                        None
                     }
-                },
-                Ok(Message::Ping(_)) => None,
-                Ok(Message::Pong(_)) => None,
-                Err(e) => {
-                    Some(Err(anyhow::anyhow!("Failed to connect WebSocket: {}", e)))
-                },
-                _ => None
+                }
+                Ok(Message::Ping(_) | Message::Pong(_)) => None,
+                Ok(Message::Close(frame)) => {
+                    info!("WebSocket closed by peer: {:?}", frame);
+                    None
+                }
+                Err(e) => Some(Err(anyhow::anyhow!("Failed to connect WebSocket: {}", e))),
+                _ => None,
             }
         });
 

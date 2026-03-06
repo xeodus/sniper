@@ -1,0 +1,72 @@
+name: CI
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ricky
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: sniper
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U ricky -d sniper"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    
+    env:
+      DATABASE_URL: postgresql://ricky:password@localhost:5432/sniper
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      
+      # Cache dependencies to speed up builds
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      
+      # Install sqlx-cli (cached by rust-cache)
+      - name: Install sqlx-cli
+        run: |
+          cargo install sqlx-cli --no-default-features --features postgres,rustls || true
+      
+      - name: Run database migrations
+        run: cargo sqlx migrate run
+      
+      # Format check first (fastest, fails fast)
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      
+      # Clippy next
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      
+      # Check sqlx metadata
+      - name: Check sqlx query metadata
+        run: cargo sqlx prepare --check
+      
+      # Build (this also checks compilation)
+      - name: Build
+        run: cargo build --verbose --all-features
+      
+      # Tests last (can reuse build artifacts)
+      - name: Run tests
+        run: cargo test --verbose --all-features

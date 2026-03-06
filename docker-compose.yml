@@ -1,0 +1,18 @@
+services:
+  pg:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ricky
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: sniper
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ricky -d sniper"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+volumes:
+  pgdata:
