@@ -1,6 +1,6 @@
 use crate::{
     data::{BinanceRequest, Candles, 
-        OrderReq, OrderRequest, OrderType, Position, 
+        OrderReq, OrderType, Position, 
         PositionSide, Side, Signal, TradingBot},
     db::Database,
     exchange::Exchange,
@@ -32,7 +32,7 @@ impl TradingBot {
             order_tx,
             exchange,
             account_balance: Arc::new(RwLock::new(initial_balance)),
-            db,
+            db
         })
     }
 
@@ -42,7 +42,7 @@ impl TradingBot {
     }
 
     /// Main processing function - processes each candle with proper separation of concerns
-    pub async fn process_candle(&self, candle: Candles, symbol: &str, req: OrderRequest) -> Result<()> {
+    pub async fn process_candle(&self, candle: Candles, symbol: &str) -> Result<()> {
         // 1. Update market analyzer with new candle
         {
             let mut analyzer = self.analyzer.write().await;
@@ -56,9 +56,9 @@ impl TradingBot {
             .await;
 
         // 3. Close positions that hit stop loss or take profit
-        for (position_id, exit_price, _position_side) in positions_to_close {
-            if let Some(_) = self.position_manager.get_position_by_id(&position_id).await {
-                /*let exit_side = match position.position_side {
+        for (position_id, exit_price, position_side) in positions_to_close {
+            if let Some(position) = self.position_manager.get_position_by_id(&position_id).await {
+                let exit_side = match position_side {
                     PositionSide::Long => Side::Sell,
                     PositionSide::Short => Side::Buy,
                 };
@@ -73,9 +73,16 @@ impl TradingBot {
                     sl: None,
                     tp: None,
                     manual: false,
-                };*/ 
+                    reduce_only: false,
+                    asset_index: 0,
+                    cloid: None
+                };
 
-                match self.execute_order(&req).await {
+                let bn_req = BinanceRequest {
+                    base: req.clone()
+                };
+
+                match self.execute_order(&bn_req.base).await {
                     Ok(_) => {
                         info!("Order succeeded, closing position...");
                         if let Err(e) = self
@@ -138,8 +145,7 @@ impl TradingBot {
         candle: Candles,
         symbol: &str,
         grid_strategy: &mut GridStrategy,
-        volatility_strategy: &mut VolatilityStrategy,
-        req: OrderRequest
+        volatility_strategy: &mut VolatilityStrategy
     ) -> Result<()> {
         // Update volatility calculator
         volatility_strategy.update(candle.clone());
@@ -155,9 +161,9 @@ impl TradingBot {
             let unfilled_sells = grid_strategy.get_unfilled_sells();
 
             // Place buy orders at grid levels below current price
-            for _ in unfilled_buys.iter().take(3) {
+            for level in unfilled_buys.iter().take(3) {
                 // Limit to 3 orders to avoid over-trading
-                /*let req = OrderReq {
+                let req = OrderReq {
                     id: level.id.clone(),
                     symbol: symbol.to_string(),
                     side: Side::Buy,
@@ -167,16 +173,23 @@ impl TradingBot {
                     sl: None,
                     tp: None,
                     manual: false,
-                };*/
+                    reduce_only: false
+                };
 
-                if let Err(e) = self.execute_order(&req).await {
+                let bn_req = BinanceRequest {
+                    base: req
+                };
+
+                let order_req = OrderRequest::Binance(bn_req);
+
+                if let Err(e) = self.execute_order(&order_req).await {
                     warn!("Failed to place grid buy order: {}", e);
                 }
             }
 
             // Place sell orders at grid levels above current price
-            for _ in unfilled_sells.iter().take(3) {
-                /*let req = OrderReq {
+            for level in unfilled_sells.iter().take(3) {
+                let req = OrderReq {
                     id: level.id.clone(),
                     symbol: symbol.to_string(),
                     side: Side::Sell,
@@ -186,15 +199,22 @@ impl TradingBot {
                     sl: None,
                     tp: None,
                     manual: false,
-                };*/
+                    reduce_only: false
+                };
+                
+                let bn_req = BinanceRequest {
+                    base: req
+                };
 
-                if let Err(e) = self.execute_order(&req).await {
+                let order_req = OrderRequest::Binance(bn_req);
+
+                if let Err(e) = self.execute_order(&order_req).await {
                     warn!("Failed to place grid sell order: {}", e);
                 }
             }
         } else {
-            // High volatility mode - use momentum/trend following
-            self.process_candle(candle, symbol, req).await?;
+            // High volatility mode - use momentum/trend following 
+            self.process_candle(candle, symbol).await?;
         }
 
         Ok(())
@@ -239,6 +259,7 @@ impl TradingBot {
             tp: Some(take_profit),
             sl: Some(stop_loss),
             manual: false,
+            reduce_only: false
         };
 
         let position = Position {

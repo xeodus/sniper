@@ -33,12 +33,6 @@ pub enum Trend {
     Sideways,
 }
 
-#[derive(Debug, Clone)]
-pub enum OrderRequest {
-    Binance(BinanceRequest),
-    Hyperliquid(HyperliquidRequest)
-}
-
 #[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct Position {
@@ -75,6 +69,45 @@ pub struct OrderReq {
     pub sl: Option<Decimal>,
     pub tp: Option<Decimal>,
     pub manual: bool,
+    pub reduce_only: bool,
+    pub asset_index: u32,
+    pub cloid: Option<String>
+}
+
+impl OrderReq {
+    pub fn market(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            symbol: self.symbol.clone(),
+            side: self.side.clone(),
+            order_type: self.order_type.clone(),
+            price: self.price,
+            size: self.size,
+            sl: self.sl,
+            tp: self.tp,
+            manual: false,
+            reduce_only: false,
+            asset_index: self.asset_index,
+            cloid: self.cloid.clone()
+        }
+    }
+
+    pub fn limit(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            symbol: self.symbol.clone(),
+            side: self.side.clone(),
+            order_type: self.order_type.clone(),
+            price: self.price,
+            size: self.size,
+            sl: self.sl,
+            tp: self.tp,
+            manual: false,
+            reduce_only: false,
+            asset_index: self.asset_index,
+            cloid: self.cloid.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -84,10 +117,7 @@ pub struct BinanceRequest {
 
 #[derive(Debug, Clone)]
 pub struct HyperliquidRequest {
-    pub base: OrderReq,
-    pub asset_index: String,
-    pub is_buy: bool,
-    pub reduce_only: bool,
+    pub asset_index: u32,
     pub cloid: Option<String>
 }
 
@@ -140,4 +170,48 @@ pub struct BinanceKlineEvent {
     pub symbol: String,
     #[serde(rename = "k")]
     pub kline: BinanceKline,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HlSubscription {
+    #[serde(rename = "type")]
+    pub sub_type: String,
+    pub coin: String,
+    pub interval: String
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HlSubscribeMsg {
+    pub method: String,
+    pub subscription: HlSubscription
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HlCandleEvent {
+    pub channel: String,
+    pub event: HlCandle
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HlCandle {
+    #[serde(rename = "t")]
+    pub open_time: i64,
+    #[serde(rename = "T")]
+    pub close_time: i64,
+    #[serde(rename = "s")]
+    pub coin: String,
+    #[serde(rename = "i")]
+    pub interval: String,
+    #[serde(rename = "o")]
+    pub open: String,
+    #[serde(rename = "h")]
+    pub high: String,
+    #[serde(rename = "l")]
+    pub low: String,
+    #[serde(rename = "c")]
+    pub close: String,
+    #[serde(rename = "v")]
+    pub volume: String,
+    #[serde(rename = "n")]
+    pub num_trades: i64
 }

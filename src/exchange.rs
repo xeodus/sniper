@@ -1,8 +1,9 @@
-use crate::data::OrderRequest;
+use crate::data::OrderReq;
 use crate::rest_client::{BinanceClient, HyperliquidClient};
 use anyhow::{anyhow, Result};
-use reqwest::Client;
+use reqwest::Response;
 use rust_decimal::Decimal;
+use tracing::warn;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -21,13 +22,13 @@ pub trait Exchange: Send + Sync + Debug {
     fn exchange_type(&self) -> ExchangeType;
 
     /// Place a market order
-    async fn place_market_order(&self, req: &OrderRequest) -> Result<String>;
+    async fn place_market_order(&self, req: &OrderReq) -> Result<String>;
 
     /// Place a limit order
-    async fn place_limit_order(&self, req: &OrderRequest) -> Result<String>;
+    async fn place_limit_order(&self, req: &OrderReq) -> Result<String>;
 
     /// Cancel an order
-    async fn cancel_order(&self, req: &OrderRequest) -> Result<()>;
+    async fn cancel_order(&self, req: &OrderReq) -> Result<()>;
 
     /// Get account balance
     async fn account_balance(&self) -> Result<Decimal>;
@@ -62,53 +63,57 @@ impl ExchangeFactory {
 /// Binance exchange implementation
 #[derive(Debug)]
 pub struct BinanceExchange {
-    client: Client,
-    base_url: String,
-    api_key: String,
-    api_secret: String,
-}
-
-/// Hyperliquid exchange implementation
-#[derive(Debug)]
-struct HyperliquidExchange {
-    client: Client,
-    base_url: String,
-    api_key: String,
-    api_secret: String
+    pub client: Arc<BinanceClient>
 }
 
 impl BinanceExchange {
     pub fn new(api_key: String, api_secret: String, testnet: bool) -> Result<Self> {
-        let base_url = if testnet {
+        /*let base_url = if testnet {
             "https://testnet.binance.vision".to_string()
         } else {
             "https://api.binance.com".to_string()
-        };
+        };*/
 
         Ok(Self {
-            client: reqwest::Client::new(),
-            base_url,
-            api_key,
-            api_secret,
+            client: Arc::new(BinanceClient::new(api_key, api_secret, testnet)) 
         })
     }
 }
 
+// TODO: Implement KuCoin exchange
+
+/// Hyperliquid exchange implementation
+#[derive(Debug)]
+pub struct HyperliquidExchange {
+    pub client: Arc<HyperliquidClient>
+}
+
 impl HyperliquidExchange {
     pub fn new(api_key: String, api_secret: String, testnet: bool) -> Result<Self> {
-        let base_url = if testnet {
+        /*let base_url = if testnet {
             "".to_string()
         }
         else {
             "https://api.hyperliquid.xyz/exchange".to_string()
-        };
+        };*/
 
         Ok(Self{
-            client: Client::new(),
-            base_url,
-            api_key,
-            api_secret
+            client: Arc::new(HyperliquidClient::new(api_key, api_secret, testnet))
         })
+    }
+
+    fn asset_index(symbol: &str) -> u32 {
+        match symbol.to_uppercase().trim_end_matches("/USDT").trim_end_matches("USDT") {
+            "BTC" => 0,
+            "ETH" => 1,
+            "SOL" => 2,
+            "ARB" => 3,
+            "MATIC" => 4,
+            other => {
+                warn!("Unknown HL asset {}, defaulting to index 2: SOL", other);
+                2
+            }
+        }
     }
 }
 
@@ -119,48 +124,62 @@ impl Exchange for HyperliquidExchange {
         ExchangeType::Hyperliquid
     }
 
-    async fn place_market_order(&self, req: &OrderRequest) -> Result<String> {
+    async fn place_market_order(&self, req: &OrderReq) -> Result<String> {
         let hyperliquid_client = HyperliquidClient::new(
-            self.api_key.clone(), 
-            self.api_secret.clone(), 
-            self.base_url.contains("testnet")
+            self.client.api_key.clone(), 
+            self.client.api_secret.clone(), 
+            self.client.base_url.contains("testnet")
         );
+
         hyperliquid_client.place_market_order(req).await
     }
 
-    async fn place_limit_order(&self, req: &OrderRequest) -> Result<String> {
+    async fn place_limit_order(&self, req: &OrderReq) -> Result<String> {
         let hyperliquid_client = HyperliquidClient::new(
-            self.api_key.clone(), 
-            self.api_secret.clone(), 
-            self.base_url.contains("testnet")
+            self.client.api_key.clone(),
+            self.client.api_secret.clone(),
+            self.client.base_url.contains("testnet")
         );
+
         hyperliquid_client.place_limit_order(req).await
     }
     
-    async fn cancel_order(&self, req: &OrderRequest) -> Result<()> {
-        let hyperliquid_client = HyperliquidClient::new(self.api_key.clone(), self.api_secret.clone(), self.base_url.contains("testnet")); 
+    async fn cancel_order(&self, req: &OrderReq) -> Result<()> {
+        let hyperliquid_client = HyperliquidClient::new(
+            self.client.api_key.clone(),
+            self.client.api_secret.clone(),
+            self.client.base_url.contains("testnet")
+        );
+
         hyperliquid_client.cancel_orders(&req).await?;
         Ok(())
     }
 
     async fn account_balance(&self) -> Result<Decimal> {
-        let hyperliquid_client = HyperliquidClient::new(self.api_key.clone(), self.api_secret.clone(), self.base_url.contains("testnet"));
+        let hyperliquid_client = HyperliquidClient::new(
+            self.client.api_key.clone(),
+            self.client.api_secret.clone(),
+            self.client.base_url.contains("testnet")
+        );
+
         hyperliquid_client.account_balance().await
     }
 
     async fn get_price(&self, symbol: &str) -> Result<Decimal> {
         let symbol = symbol.replace("-", "").to_uppercase();
-        let url = format!("{}/info", self.base_url);
+        let url = format!("{}/info", self.client.base_url);
         let body = serde_json::json!( {"type": "allMids"} );
-        let response = self.client.post(url).json(&body).send().await?;
+        let response: Response = self.client.client.post(url).json(&body).send().await?;
 
         if !response.status().is_success() {
             return Err(anyhow!("Invalid response received: {:?}", response.text().await?));
         }
 
         let res = response.json::<serde_json::Value>().await?;
+
         let price_str = res[&symbol].as_str()
             .ok_or_else(|| anyhow!("Symbol {} not found in allMids response", symbol))?;
+
         let price = Decimal::from_str_exact(price_str)
             .map_err(|e| anyhow!("Failed to parse price as Decimal: {}", e))?;
 
@@ -174,29 +193,31 @@ impl Exchange for BinanceExchange {
         ExchangeType::Binance
     }
 
-    async fn place_market_order(&self, req: &OrderRequest) -> Result<String> {
+    async fn place_market_order(&self, req: &OrderReq) -> Result<String> {
         let binance_client = BinanceClient::new(
-            self.api_key.clone(),
-            self.api_secret.clone(),
-            self.base_url.contains("testnet"),
+            self.client.api_key.clone(),
+            self.client.api_secret.clone(),
+            self.client.base_url.contains("testnet")
         );
+
         binance_client.place_market_order(req).await
     }
 
-    async fn place_limit_order(&self, req: &OrderRequest) -> Result<String> {
+    async fn place_limit_order(&self, req: &OrderReq) -> Result<String> {
         let binance_client = BinanceClient::new(
-            self.api_key.clone(),
-            self.api_secret.clone(),
-            self.base_url.contains("testnet"),
+            self.client.api_key.clone(),
+            self.client.api_secret.clone(),
+            self.client.base_url.contains("testnet")
         );
+
         binance_client.place_limit_order(req).await
     }
 
-    async fn cancel_order(&self, req: &OrderRequest) -> Result<()> {
+    async fn cancel_order(&self, req: &OrderReq) -> Result<()> {
         let binance_client = BinanceClient::new(
-            self.api_key.clone(),
-            self.api_secret.clone(),
-            self.base_url.contains("testnet"),
+            self.client.api_key.clone(),
+            self.client.api_secret.clone(),
+            self.client.base_url.contains("testnet")
         );
 
         binance_client.cancel_orders(&req).await?;
@@ -205,10 +226,11 @@ impl Exchange for BinanceExchange {
 
     async fn account_balance(&self) -> Result<Decimal> {
         let binance_client = BinanceClient::new(
-            self.api_key.clone(),
-            self.api_secret.clone(),
-            self.base_url.contains("testnet"),
+            self.client.api_key.clone(),
+            self.client.api_secret.clone(),
+            self.client.base_url.contains("testnet")
         );
+
         binance_client.account_balance().await
     }
 
@@ -216,12 +238,12 @@ impl Exchange for BinanceExchange {
         let symbol = symbol.replace("/", "").to_uppercase();
         let url = format!(
             "{}/api/v3/ticker/price?symbol={}",
-            self.base_url, symbol
+            self.client.base_url, symbol
         );
 
-        let response = self.client
+        let response = self.client.client
             .get(&url)
-            .header("X-MBX-APIKEY", self.api_key.clone())   
+            .header("X-MBX-APIKEY", self.client.api_key.clone())   
             .send()
             .await?;
 

@@ -1,6 +1,6 @@
 use crate::{
     config::TradingConfig,
-    data::{BinanceRequest, OrderReq, OrderRequest, Signal, TradingBot},
+    data::{OrderReq, Signal, TradingBot},
     db::Database,
     exchange::{ExchangeFactory, ExchangeType},
     grid::GridStrategy,
@@ -132,14 +132,14 @@ async fn main() -> Result<()> {
     });
 
     // Spawn order monitoring task
-    /*let order_monitor = tokio::spawn(async move {
+    let order_monitor = tokio::spawn(async move {
         while let Some(order) = order_rx.recv().await {
             info!(
                 "Order: {:?} {:?} {} @ {}",
                 order.side, order.order_type, order.symbol, order.price
             );
         }
-    });*/
+    });
 
     // WebSocket connection - clone strings before moving into async block
     let symbol = trading_config.symbol.clone();
@@ -196,38 +196,18 @@ async fn main() -> Result<()> {
                         // Process candle with grid/volatility if available
                         let mut grid_guard = grid_strategy_arc.lock().await;
                         let mut vol_guard = volatility_strategy_arc.lock().await;
-                        let has_strategies = grid_strategy.is_some() && volatility_strategy.is_some();
 
-                        if has_strategies {
-                            while let Some(req) = order_rx.recv().await {
-                                let bn_req = BinanceRequest {
-                                    base: req.clone()
-                                };
-
-                                let order_req = OrderRequest::Binance(bn_req);
-
-                                if let (Some(grid), Some(vol)) = (grid_guard.as_mut(), vol_guard.as_mut()) {
-                                    if let Err(e) = bot_clone.process_candle_with_grid(candle.clone(), &symbol, grid, vol, order_req.clone()).await {
-                                        error!("Error processing candles with grid: {}", e);
-                                    }
-                                }
-
-                                info!("Order: {:?} {:?} {} @ {}", req.side, req.order_type, req.size, req.price);
+                        if let (Some(grid), Some(vol)) = (grid_guard.as_mut(), vol_guard.as_mut()) {
+                            if let Err(e) = bot_clone.process_candle_with_grid(candle.clone(), &symbol, grid, vol).await {
+                                error!("Error processing candles with grid: {}", e);
                             }
-                        }
-                        else {
-                            while let Some(req) = order_rx.recv().await {
-                                let bn_req = BinanceRequest {
-                                    base: req.clone()
-                                };
+                            else {
+                                drop(grid_guard);
+                                drop(vol_guard);
 
-                                let order_req = OrderRequest::Binance(bn_req);
-
-                                if let Err(e) = bot_clone.process_candle(candle.clone(), &symbol, order_req.clone()).await {
+                                if let Err(e) = bot_clone.process_candle(candle.clone(), &symbol).await {
                                     error!("Error processing the candles: {}", e);
                                 }
-
-                                info!("Order: {:?} {:?} {} @ {}", req.side, req.order_type, req.size, req.price);
                             }
                         } 
                     },
@@ -250,9 +230,9 @@ async fn main() -> Result<()> {
         result = signal_monitor => {
             error!("Signal monitoring stopped: {:?}", result);
         }
-        /*result = order_monitor => {
+        result = order_monitor => {
             error!("Order monitoring stopped: {:?}", result);
-        }*/
+        }
         result = ws_handler => {
             error!("WebSocket handler stopped: {:?}", result);
         }

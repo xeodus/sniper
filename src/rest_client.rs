@@ -1,4 +1,4 @@
-use crate::data::{OrderRequest, Side};
+use crate::data::{HyperliquidRequest, OrderReq, Side};
 use crate::sign::signature;
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -6,6 +6,7 @@ use reqwest::Client;
 use rust_decimal::Decimal;
 use tracing::info;
 
+#[derive(Debug)]
 pub struct BinanceClient {
     pub client: Client,
     pub base_url: String,
@@ -13,6 +14,7 @@ pub struct BinanceClient {
     pub api_secret: String,
 }
 
+#[derive(Debug)]
 pub struct HyperliquidClient {
     pub client: Client,
     pub base_url: String,
@@ -30,10 +32,14 @@ impl HyperliquidClient {
         };
 
         Self {
-            client: Client::new(),
-            base_url,
+            client: Client::builder()
+                .tcp_nodelay(true)
+                .pool_idle_timeout(None)
+                .build()
+                .expect("Failed to build reqwest client"),
             api_key,
-            api_secret
+            api_secret,
+            base_url
         }
     }
 
@@ -59,35 +65,24 @@ impl HyperliquidClient {
         Ok(balance)
     }
 
-    pub async fn place_market_order(&self, req: &OrderRequest) -> Result<String> { 
-        let req_ = match req {
-            OrderRequest::Hyperliquid(hl_req) => hl_req,
-            _  => {
-                return Err(anyhow!("Hyperliquid exchange received non-hyperliquid order request"));
-            } 
-        };
-        //let symbol = req_.base.symbol.replace("-", "").to_uppercase();
+    pub async fn place_market_order(&self, req: &OrderReq) -> Result<String> { 
         let timestamp = Utc::now().timestamp_millis();
 
-        /*let side = match req_.base.side {
-            Side::Buy => "BUY".to_string(),
-            Side::Sell => "SELL".to_string(),
-            Side::Hold => "HOLD".to_string()
-        };*/
-
-        if req_.base.size.is_zero() {
-            return Err(anyhow!("Refusing to place market order for size zero: {}", req_.base.symbol));
+        if req.size.is_zero() {
+            return Err(anyhow!("Refusing HL market order for size zero: {}", req.symbol));
         }
+
+        let is_buy = req.side == Side::Buy;
 
         let url = format!("{}/exchange",self.base_url);
         let order = serde_json::json!({
-            "a": req_.asset_index,
-            "b": req_.is_buy,
-            "p": req_.base.price,
-            "s": req_.base.size,
-            "r": req_.reduce_only,
+            "a": req.asset_index,
+            "b": is_buy,
+            "p": req.price,
+            "s": req.size,
+            "r": req.reduce_only,
             "t": { "market": {"tif": "Ioc"} },
-            "c": req_.cloid
+            "c": req.cloid
         });
 
         let action = serde_json::json!({
@@ -107,40 +102,32 @@ impl HyperliquidClient {
         let response = self.client.post(url).json(&body).send().await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("Invalid response: {:?}", response.text().await?));
+            return Err(anyhow!("Invalid response from HL market otder: {:?}", response.text().await?));
         }
 
-        info!("Placing market order {:?} for {} of size {} @ {}", req_.base.side, req_.base.symbol, req_.base.size, req_.base.price);
+        info!("Placing market order on HL {:?} for {} of size {} @ {}", req.side, req.symbol, req.size, req.price);
 
         Ok(response.text().await?)
     }
 
-    pub async fn place_limit_order(&self, req: &OrderRequest) -> Result<String> { 
-        let req_ = match req {
-            OrderRequest::Hyperliquid(hl_req) => hl_req,
-            _ => {
-                return Err(anyhow!("Hyperliquid exchange received non-hyperliquid order requests"));
-            }
-        };
-        //let symbol = req_.base.symbol.replace("-", "").to_uppercase();
-
-        /*let side = match req_.base.side {
-            Side::Buy => "BUY".to_string(),
-            Side::Sell => "SELL".to_string(),
-            Side::Hold => "HOLD".to_string()
-        };*/
-
+    pub async fn place_limit_order(&self, req: &OrderReq) -> Result<String> {
         let timestamp = Utc::now().timestamp_millis();
+
+        if req.size.is_zero() {
+            return Err(anyhow!("Refusing HL limit order for size zero: {}", req.symbol));
+        }
+        
+        let is_buy = req.side == Side::Buy;
         let url = format!("{}/exchange", self.base_url); 
 
         let order = serde_json::json!({
-            "a": req_.asset_index,
-            "b": req_.is_buy,
-            "p": req_.base.price,
-            "s": req_.base.size,
-            "r": req_.reduce_only,
+            "a": req.asset_index,
+            "b": is_buy,
+            "p": req.price,
+            "s": req.size,
+            "r": req.reduce_only,
             "t": { "limit": {"tif": "Gtc"}},
-            "c": req_.cloid
+            "c": req.cloid
         });
 
         let action = serde_json::json!({
@@ -160,31 +147,23 @@ impl HyperliquidClient {
         let response = self.client.post(url).json(&body).send().await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("Invalid response received: {:?}", response.text().await?));
+            return Err(anyhow!("Invalid response received HL limit order: {:?}", response.text().await?));
         }
 
-        info!("Placing limit order {:?} for {} of size {} @ {}", req_.base.side, req_.base.symbol, req_.base.size, req_.base.price);
+        info!("Placing limit order {:?} for {} of size {} @ {}", req.side, req.symbol, req.size, req.price);
 
         Ok(response.text().await?)
     }
 
-    pub async fn cancel_orders(&self, req: &OrderRequest) -> Result<String> {
-        let req_ = match req {
-            OrderRequest::Hyperliquid(hl_req) => hl_req,
-            _ => {
-                return Err(anyhow!("Hyperliquid exchange received non-hyperliquid order requests"));
-            }
-        };
-
-        //let symbol = req_.base.symbol.replace("-", "").to_uppercase();
+    pub async fn cancel_orders(&self, req: &OrderReq) -> Result<String> {
         let url = format!("{}/exchange", self.base_url);
         let timestamp = Utc::now().timestamp_millis();
 
         let action = serde_json::json!({
             "type": "cancel",
             "cancels": [{
-                "a": req_.asset_index,
-                "o": req_.base.id
+                "a": req.asset_index,
+                "o": req.id
             }]
         });
 
@@ -199,10 +178,10 @@ impl HyperliquidClient {
         let response = self.client.post(url).json(&body).send().await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("Invalid response received: {}", response.text().await?));
+            return Err(anyhow!("Invalid response received while cancelling order for HL: {}", response.text().await?));
         }
 
-        info!("Cancelling the order for ID {} and symbol {}", req_.base.id, req_.base.symbol);
+        info!("Cancelling the order for ID {} and symbol {}", req.id, req.symbol);
 
         Ok(response.text().await?)
     }
@@ -254,18 +233,13 @@ impl BinanceClient {
         Ok(balance)
     }
 
-    pub async fn place_market_order(&self, req: &OrderRequest) -> Result<String> {
-        let req_ = match req {
-            OrderRequest::Binance(bn_req) => bn_req,
-            _ => return Err(anyhow!("Binance exchange received a non-Binance order request")),
-        };
-
-        if req_.base.size.is_zero() {
-            return Err(anyhow!("Refusing to place order of size zero for: {}", req_.base.symbol));
+    pub async fn place_market_order(&self, req: &OrderReq) -> Result<String> {
+        if req.size.is_zero() {
+            return Err(anyhow!("Refusing to place order of size zero for: {}", req.symbol));
         }
 
-        let symbol = req_.base.symbol.replace("/", "").to_uppercase();
-        let side = match req_.base.side {
+        let symbol = req.symbol.replace("/", "").to_uppercase();
+        let side = match req.side {
             Side::Buy => "BUY",
             Side::Sell => "SELL",
             Side::Hold => "HOLD",
@@ -273,7 +247,7 @@ impl BinanceClient {
 
         let body = format!(
             "symbol={}&side={}&type=MARKET&quantity={}&newClientOrderId={}&recvWindow=5000&timestamp={}",
-            symbol, side, req_.base.size, req_.base.id, Utc::now().timestamp_millis()
+            symbol, side, req.size, req.id, Utc::now().timestamp_millis()
         );
 
         let url = format!("{}/api/v3/order", self.base_url);
@@ -288,24 +262,19 @@ impl BinanceClient {
             return Err(anyhow!("Invalid response while placing market order on Binance: {:?}", response.text().await));
         }
 
-        info!("Placing market order {:?} for {} of size {} @ {}", req_.base.side, req_.base.symbol, req_.base.size, req_.base.price);
+        info!("Placing market order {:?} for {} of size {} @ {}", req.side, req.symbol, req.size, req.price);
 
         let res = response.json::<serde_json::Value>().await?;
         Ok(res.to_string())
     }
 
-    pub async fn place_limit_order(&self, req: &OrderRequest) -> Result<String> {
-        let req_ = match req {
-            OrderRequest::Binance(bn_req) => bn_req,
-            _ => return Err(anyhow!("Binance exchange received a non-Binance order request")),
-        };
-
-        if req_.base.size.is_zero() {
-            return Err(anyhow!("Refusing to place order of size zero for: {}", req_.base.symbol));
+    pub async fn place_limit_order(&self, req: &OrderReq) -> Result<String> {
+        if req.size.is_zero() {
+            return Err(anyhow!("Refusing to place order of size zero for: {}", req.symbol));
         }
 
-        let symbol = req_.base.symbol.replace("/", "").to_uppercase();
-        let side = match req_.base.side {
+        let symbol = req.symbol.replace("/", "").to_uppercase();
+        let side = match req.side {
             Side::Buy => "BUY",
             Side::Sell => "SELL",
             Side::Hold => "HOLD",
@@ -313,7 +282,7 @@ impl BinanceClient {
 
         let body = format!(
             "symbol={}&side={}&type=LIMIT&quantity={}&price={}&timeInForce=GTC&newClientOrderId={}&recvWindow=5000&timestamp={}",
-            symbol, side, req_.base.size, req_.base.price, req_.base.id, Utc::now().timestamp_millis()
+            symbol, side, req.size, req.price, req.id, Utc::now().timestamp_millis()
         );
 
         let url = format!("{}/api/v3/order", self.base_url);
@@ -328,13 +297,13 @@ impl BinanceClient {
             return Err(anyhow!("Invalid response while placing limit order on Binance: {:?}", response.text().await));
         }
 
-        info!("Placing limit order {:?} for {} of size {} @ {}", req_.base.side, req_.base.symbol, req_.base.size, req_.base.price);
+        info!("Placing limit order {:?} for {} of size {} @ {}", req.side, req.symbol, req.size, req.price);
 
         let res = response.json::<serde_json::Value>().await?;
         Ok(res.to_string())
     }
 
-    pub async fn cancel_orders(&self, req: &OrderRequest) -> Result<String> {
+    pub async fn cancel_orders(&self, req: &OrderReq) -> Result<String> {
         let req_ = match req {
             OrderRequest::Binance(bn_req) => bn_req,
             _ => return Err(anyhow!("Binance exchange received a non-Binance order request")),
